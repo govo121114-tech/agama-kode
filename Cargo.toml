@@ -9,5 +9,9 @@ crossterm = "0.28"
 syntect = { version = "5", default-features = false, features = ["default-fancy"] }
 walkdir = "2"
 
+[[bin]]
+name = "agamacode"
+path = "src/main.rs"
+
 [profile.release]
 opt-level = 2
