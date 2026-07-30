@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use portable_pty::{ChildKiller, CommandBuilder, native_pty_system, PtyPair, PtySize};
@@ -11,37 +11,77 @@ use crate::theme;
 const MAX_LINES: usize = 5000;
 
 struct TerminalBuffer {
-    lines: Vec<String>,
+    raw: String,
 }
 
 impl TerminalBuffer {
     fn new() -> Self {
-        Self { lines: Vec::new() }
+        Self { raw: String::new() }
     }
 
-    fn push(&mut self, line: String) {
-        self.lines.push(line);
-        if self.lines.len() > MAX_LINES { self.lines.remove(0); }
+    fn append(&mut self, s: &str) {
+        self.raw.push_str(s);
+        if self.raw.len() > MAX_LINES * 200 {
+            self.raw = self.raw.split_off(self.raw.len() - MAX_LINES * 100);
+        }
     }
 
-    fn content(&self, scroll: usize, height: usize) -> Vec<String> {
-        let total = self.lines.len();
+    fn display_lines(&self, scroll: usize, height: usize) -> Vec<String> {
+        let text = process_pty(&self.raw);
+        let mut lines: Vec<&str> = text.split('\n').collect();
+        if lines.last().map_or(false, |l| l.is_empty()) {
+            lines.pop();
+        }
+        let total = lines.len();
         let end = total.saturating_sub(scroll);
         let start = end.saturating_sub(height);
-        self.lines[start..end].iter().map(|l| strip_ansi(l)).collect()
+        lines[start..end].iter().map(|l| l.to_string()).collect()
     }
 }
 
-fn strip_ansi(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars();
+fn process_pty(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut chars = raw.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\x1b' && chars.next() == Some('[') {
-            while let Some(n) = chars.next() {
-                if n.is_ascii_alphabetic() || n == '~' { break; }
+        match c {
+            '\x1b' => {
+                match chars.peek() {
+                    Some('[') => {
+                        chars.next();
+                        while let Some(&n) = chars.peek() {
+                            if n == '\x1b' { break; }
+                            if n.is_ascii_alphabetic() || n == '~' {
+                                chars.next();
+                                break;
+                            }
+                            chars.next();
+                        }
+                    }
+                    Some(']') => {
+                        chars.next();
+                        loop {
+                            match chars.next() {
+                                Some('\x1b') => { if chars.next() == Some('\\') { break; } }
+                                Some(_) => {}
+                                None => break,
+                            }
+                        }
+                    }
+                    Some(&'(') | Some(&')') | Some(&'#') | Some(&'%') => { chars.next(); }
+                    _ => {}
+                }
             }
-        } else {
-            out.push(c);
+            '\r' => {
+                if let Some(pos) = out.rfind('\n') {
+                    out.truncate(pos + 1);
+                } else {
+                    out.clear();
+                }
+            }
+            '\n' => out.push('\n'),
+            '\t' => out.push('\t'),
+            c if c.is_ascii_control() && c != '\n' && c != '\t' => {}
+            c => out.push(c),
         }
     }
     out
@@ -52,6 +92,8 @@ struct ShellProcess {
     _child: Box<dyn ChildKiller>,
     _pair: PtyPair,
 }
+
+use std::io::Write;
 
 pub struct TerminalPanel {
     buffer: Arc<Mutex<TerminalBuffer>>,
@@ -81,7 +123,7 @@ impl TerminalPanel {
         self.stop();
 
         let pty_system = native_pty_system();
-        let mut pair = match pty_system.openpty(PtySize {
+        let pair = match pty_system.openpty(PtySize {
             rows: 40,
             cols: 120,
             pixel_width: 0,
@@ -90,8 +132,8 @@ impl TerminalPanel {
             Ok(p) => p,
             Err(e) => {
                 let mut b = self.buffer.lock().unwrap();
-                b.lines.clear();
-                b.push(format!("PTY init error: {e}"));
+                b.raw.clear();
+                b.raw.push_str(&format!("PTY init error: {e}"));
                 self.visible = true;
                 self.focused = false;
                 return;
@@ -106,22 +148,22 @@ impl TerminalPanel {
             Ok(c) => c,
             Err(e) => {
                 let mut b = self.buffer.lock().unwrap();
-                b.lines.clear();
-                b.push(format!("Spawn error: {e}"));
-                b.push(String::new());
-                b.push("Make sure the shell is installed.".to_string());
+                b.raw.clear();
+                b.raw.push_str(&format!("Spawn error: {e}"));
+                b.raw.push('\n');
+                b.raw.push_str("Make sure the shell is installed.");
                 self.visible = true;
                 self.focused = false;
                 return;
             }
         };
 
-        let reader = match pair.master.try_clone_reader() {
+        let mut reader = match pair.master.try_clone_reader() {
             Ok(r) => r,
             Err(e) => {
                 let mut b = self.buffer.lock().unwrap();
-                b.lines.clear();
-                b.push(format!("PTY reader error: {e}"));
+                b.raw.clear();
+                b.raw.push_str(&format!("PTY reader error: {e}"));
                 self.visible = true;
                 self.focused = false;
                 return;
@@ -131,8 +173,8 @@ impl TerminalPanel {
             Ok(w) => w,
             Err(e) => {
                 let mut b = self.buffer.lock().unwrap();
-                b.lines.clear();
-                b.push(format!("PTY writer error: {e}"));
+                b.raw.clear();
+                b.raw.push_str(&format!("PTY writer error: {e}"));
                 self.visible = true;
                 self.focused = false;
                 return;
@@ -141,21 +183,19 @@ impl TerminalPanel {
 
         {
             let mut b = self.buffer.lock().unwrap();
-            b.lines.clear();
-            b.push(format!("Terminal [{}] started", shell));
+            b.raw.clear();
         }
 
         let buf = self.buffer.clone();
         thread::spawn(move || {
-            let mut reader = BufReader::new(reader);
-            let mut line = String::new();
+            let mut temp = [0u8; 4096];
             loop {
-                line.clear();
-                match reader.read_line(&mut line) {
+                match reader.read(&mut temp) {
                     Ok(0) => break,
-                    Ok(_) => {
-                        let s = line.trim_end_matches('\r').trim_end_matches('\n').to_string();
-                        buf.lock().unwrap().push(s);
+                    Ok(n) => {
+                        if let Ok(s) = std::str::from_utf8(&temp[..n]) {
+                            buf.lock().unwrap().append(s);
+                        }
                     }
                     Err(_) => break,
                 }
@@ -193,7 +233,7 @@ impl TerminalPanel {
     }
 
     pub fn scroll_up(&mut self) {
-        let total = self.buffer.lock().unwrap().lines.len();
+        let total = self.buffer.lock().unwrap().raw.len();
         if self.scroll < total.saturating_sub(1) { self.scroll += 1; }
     }
 
@@ -204,7 +244,7 @@ impl TerminalPanel {
     pub fn render(&self, area: Rect) -> Paragraph {
         let height = area.height.saturating_sub(2) as usize;
         let buf = self.buffer.lock().unwrap();
-        let content = buf.content(self.scroll, height.max(1));
+        let content = buf.display_lines(self.scroll, height.max(1));
 
         let lines: Vec<Line> = if content.is_empty() {
             vec![Line::from(Span::styled("No output yet.", Style::default().fg(theme::FG_DIM)))]
