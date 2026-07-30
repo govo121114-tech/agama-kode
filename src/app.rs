@@ -390,11 +390,11 @@ impl App {
                 KeyCode::Char(ch) => {
                     let mut buf = [0u8; 4];
                     let s = ch.encode_utf8(&mut buf);
-                    self.term_panel.write_and_echo(s.as_bytes());
+                    self.term_panel.write(s.as_bytes());
                 }
-                KeyCode::Enter => self.term_panel.write_and_echo(b"\r\n"),
-                KeyCode::Backspace => self.term_panel.write_and_echo(b"\x08"),
-                KeyCode::Tab => self.term_panel.write_and_echo(b"\t"),
+                KeyCode::Enter => self.term_panel.write(b"\r\n"),
+                KeyCode::Backspace => self.term_panel.write(b"\x08"),
+                KeyCode::Tab => self.term_panel.write(b"\t"),
                 KeyCode::Up => self.term_panel.write(b"\x1b[A"),
                 KeyCode::Down => self.term_panel.write(b"\x1b[B"),
                 KeyCode::Right => self.term_panel.write(b"\x1b[C"),

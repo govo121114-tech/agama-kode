@@ -1,7 +1,7 @@
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, Command, Stdio};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use portable_pty::{ChildKiller, CommandBuilder, native_pty_system, PtyPair, PtySize};
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -16,9 +16,7 @@ struct TerminalBuffer {
 
 impl TerminalBuffer {
     fn new() -> Self {
-        let mut b = Self { lines: Vec::new() };
-        b.push("Terminal ready. Press Ctrl+T to open.".to_string());
-        b
+        Self { lines: Vec::new() }
     }
 
     fn push(&mut self, line: String) {
@@ -50,9 +48,9 @@ fn strip_ansi(s: &str) -> String {
 }
 
 struct ShellProcess {
-    child: Child,
-    stdin: Box<dyn Write + Send>,
-    started: String,
+    writer: Box<dyn Write + Send>,
+    _child: Box<dyn ChildKiller>,
+    _pair: PtyPair,
 }
 
 pub struct TerminalPanel {
@@ -82,85 +80,106 @@ impl TerminalPanel {
     pub fn start_shell(&mut self, shell: &str) {
         self.stop();
 
-        let mut cmd = if shell == "wsl.exe" {
-            let mut c = Command::new(shell);
-            c.arg("--login");
-            c
-        } else {
-            Command::new(shell)
-        };
-
-        let child = cmd
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-
-        match child {
-            Ok(mut child) => {
-                let stdin = child.stdin.take().map(|s| Box::new(s) as Box<dyn Write + Send>);
-
-                if let Some(mut stdin) = stdin {
-                    let buf = self.buffer.clone();
-                    let started = shell.to_string();
-
-                    if let Some(stdout) = child.stdout.take() {
-                        let buf2 = buf.clone();
-                        thread::spawn(move || {
-                            let reader = BufReader::new(stdout);
-                            for line in reader.lines() {
-                                match line {
-                                    Ok(l) => buf2.lock().unwrap().push(l),
-                                    Err(_) => break,
-                                }
-                            }
-                        });
-                    }
-                    if let Some(stderr) = child.stderr.take() {
-                        let buf2 = buf.clone();
-                        thread::spawn(move || {
-                            let reader = BufReader::new(stderr);
-                            for line in reader.lines() {
-                                match line {
-                                    Ok(l) => buf2.lock().unwrap().push(l),
-                                    Err(_) => break,
-                                }
-                            }
-                        });
-                    }
-
-                    {
-                        let mut b = self.buffer.lock().unwrap();
-                        b.lines.clear();
-                        b.push(shell.to_string());
-                        b.push(String::new());
-                    }
-                    let _ = writeln!(&mut stdin as &mut dyn Write, "");
-                    let _ = (&mut stdin as &mut dyn Write).flush();
-
-                    self.shell = Some(ShellProcess { child, stdin, started: started.clone() });
-                    self.visible = true;
-                    self.focused = true;
-                    self.scroll = 0;
-                    self.shell_type = started;
-                }
-            }
+        let pty_system = native_pty_system();
+        let mut pair = match pty_system.openpty(PtySize {
+            rows: 40,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            Ok(p) => p,
             Err(e) => {
                 let mut b = self.buffer.lock().unwrap();
                 b.lines.clear();
-                b.push(format!("Failed to start {}: {}", shell, e));
+                b.push(format!("PTY init error: {e}"));
+                self.visible = true;
+                self.focused = false;
+                return;
+            }
+        };
+
+        let mut cmd = CommandBuilder::new(shell);
+        if shell == "wsl.exe" {
+            cmd.arg("--login");
+        }
+        let child = match pair.slave.spawn_command(cmd) {
+            Ok(c) => c,
+            Err(e) => {
+                let mut b = self.buffer.lock().unwrap();
+                b.lines.clear();
+                b.push(format!("Spawn error: {e}"));
                 b.push(String::new());
                 b.push("Make sure the shell is installed.".to_string());
                 self.visible = true;
                 self.focused = false;
+                return;
             }
+        };
+
+        let reader = match pair.master.try_clone_reader() {
+            Ok(r) => r,
+            Err(e) => {
+                let mut b = self.buffer.lock().unwrap();
+                b.lines.clear();
+                b.push(format!("PTY reader error: {e}"));
+                self.visible = true;
+                self.focused = false;
+                return;
+            }
+        };
+        let mut writer = match pair.master.take_writer() {
+            Ok(w) => w,
+            Err(e) => {
+                let mut b = self.buffer.lock().unwrap();
+                b.lines.clear();
+                b.push(format!("PTY writer error: {e}"));
+                self.visible = true;
+                self.focused = false;
+                return;
+            }
+        };
+
+        {
+            let mut b = self.buffer.lock().unwrap();
+            b.lines.clear();
+            b.push(format!("Terminal [{}] started", shell));
         }
+
+        let buf = self.buffer.clone();
+        thread::spawn(move || {
+            let mut reader = BufReader::new(reader);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let s = line.trim_end_matches('\r').trim_end_matches('\n').to_string();
+                        buf.lock().unwrap().push(s);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        let _ = writeln!(&mut writer as &mut dyn Write, "");
+        let _ = writer.flush();
+
+        self.shell = Some(ShellProcess {
+            writer,
+            _child: child,
+            _pair: pair,
+        });
+        self.visible = true;
+        self.focused = true;
+        self.scroll = 0;
+        self.shell_type = shell.to_string();
     }
 
     pub fn stop(&mut self) {
         if let Some(mut s) = self.shell.take() {
-            let _ = s.child.kill();
-            let _ = s.child.wait();
+            let _ = s.writer.flush();
+            let _ = s._child.kill();
         }
         self.visible = false;
         self.focused = false;
@@ -168,30 +187,8 @@ impl TerminalPanel {
 
     pub fn write(&mut self, data: &[u8]) {
         if let Some(ref mut s) = self.shell {
-            let _ = s.stdin.write_all(data);
-            let _ = s.stdin.flush();
-        }
-    }
-
-    pub fn write_and_echo(&mut self, data: &[u8]) {
-        self.write(data);
-        if let Ok(s) = std::str::from_utf8(data) {
-            let mut b = self.buffer.lock().unwrap();
-            if data == b"\x08" {
-                if let Some(last) = b.lines.last_mut() {
-                    last.pop();
-                }
-            } else if data == b"\r\n" || data == b"\n" {
-                b.push(String::new());
-            } else if data == b"\t" {
-                if let Some(last) = b.lines.last_mut() {
-                    last.push('\t');
-                }
-            } else if s.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
-                if let Some(last) = b.lines.last_mut() {
-                    last.push_str(s);
-                }
-            }
+            let _ = s.writer.write_all(data);
+            let _ = s.writer.flush();
         }
     }
 
