@@ -32,11 +32,8 @@ fn main() -> io::Result<()> {
             app.render(f);
         })?;
 
-        if let Event::Key(ke) = event::read()? {
-            let _ = app.handle_event(Event::Key(ke));
-        } else {
-            let _ = app.handle_event(event::read()?);
-        }
+        let evt = event::read()?;
+        let _ = app.handle_event(evt);
 
         match app.action {
             Action::Quit => {

@@ -152,9 +152,12 @@ impl TerminalPanel {
         self.error_msg.clear();
 
         match Self::spawn_pty(shell, self.rows(), self.cols()) {
-            Ok((killer, writer, reader)) => {
+            Ok((killer, mut writer, reader)) => {
                 let buf = self.buffer.clone();
-                buf.lock().unwrap().set_lines(&format!("Starting {}...", shell));
+                let msg = format!("Starting {}\r\n", shell);
+                buf.lock().unwrap().set_lines(&msg);
+                let _ = writer.write_all(b"\r\n");
+                let _ = writer.flush();
                 thread::spawn(move || Self::read_loop(reader, buf));
                 self.child_killer = Some(killer);
                 self.writer = Some(writer);
@@ -171,7 +174,6 @@ impl TerminalPanel {
                     let mut buf = self.buffer.lock().unwrap();
                     buf.set_lines(&format!(
                         "Failed to start terminal: {e}\n\n\
-                         Make sure Windows Terminal/ConPty is available.\n\
                          Press Ctrl+T to close this panel."
                     ));
                 }
@@ -215,8 +217,8 @@ impl TerminalPanel {
         let buf = self.buffer.lock().unwrap();
         let content = buf.content(self.scroll, height.max(1));
 
-        let lines: Vec<Line> = if content.is_empty() {
-            vec![Line::from(Span::raw("Terminal ready."))]
+        let lines: Vec<Line> = if content.iter().all(|l| l.is_empty() || l.starts_with("Starting ")) {
+            vec![Line::from(Span::styled("Terminal ready — waiting for shell output...", Style::default().fg(theme::FG_DIM)))]
         } else {
             content.into_iter().map(|l| Line::from(Span::raw(l))).collect()
         };
