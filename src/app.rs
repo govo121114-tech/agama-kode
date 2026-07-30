@@ -371,12 +371,15 @@ impl App {
 
         if self.term_panel.visible && self.term_panel.focused {
             if ke.modifiers == KeyModifiers::CONTROL {
-                match ke.code {
-                    KeyCode::Char('c') => self.term_panel.write_str("\x03"),
-                    KeyCode::Char('d') => self.term_panel.write_str("\x04"),
-                    KeyCode::Char('l') => self.term_panel.write_str("\x0c"),
-                    KeyCode::Char('z') => self.term_panel.write_str("\x1a"),
-                    _ => {}
+                let byte = match ke.code {
+                    KeyCode::Char('c') => Some(b"\x03"),
+                    KeyCode::Char('d') => Some(b"\x04"),
+                    KeyCode::Char('l') => Some(b"\x0c"),
+                    KeyCode::Char('z') => Some(b"\x1a"),
+                    _ => None,
+                };
+                if let Some(data) = byte {
+                    self.term_panel.write(data);
                 }
                 return;
             }
@@ -387,18 +390,18 @@ impl App {
                 KeyCode::Char(ch) => {
                     let mut buf = [0u8; 4];
                     let s = ch.encode_utf8(&mut buf);
-                    self.term_panel.write_str(s);
+                    self.term_panel.write_and_echo(s.as_bytes());
                 }
-                KeyCode::Enter => self.term_panel.write_str("\r\n"),
-                KeyCode::Backspace => self.term_panel.write_str("\x08"),
-                KeyCode::Tab => self.term_panel.write_str("\t"),
-                KeyCode::Up => self.term_panel.write_str("\x1b[A"),
-                KeyCode::Down => self.term_panel.write_str("\x1b[B"),
-                KeyCode::Right => self.term_panel.write_str("\x1b[C"),
-                KeyCode::Left => self.term_panel.write_str("\x1b[D"),
-                KeyCode::Home => self.term_panel.write_str("\x1b[H"),
-                KeyCode::End => self.term_panel.write_str("\x1b[F"),
-                KeyCode::Delete => self.term_panel.write_str("\x1b[3~"),
+                KeyCode::Enter => self.term_panel.write_and_echo(b"\r\n"),
+                KeyCode::Backspace => self.term_panel.write_and_echo(b"\x08"),
+                KeyCode::Tab => self.term_panel.write_and_echo(b"\t"),
+                KeyCode::Up => self.term_panel.write(b"\x1b[A"),
+                KeyCode::Down => self.term_panel.write(b"\x1b[B"),
+                KeyCode::Right => self.term_panel.write(b"\x1b[C"),
+                KeyCode::Left => self.term_panel.write(b"\x1b[D"),
+                KeyCode::Home => self.term_panel.write(b"\x1b[H"),
+                KeyCode::End => self.term_panel.write(b"\x1b[F"),
+                KeyCode::Delete => self.term_panel.write(b"\x1b[3~"),
                 _ => {}
             }
             return;

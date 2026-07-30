@@ -173,7 +173,27 @@ impl TerminalPanel {
         }
     }
 
-    pub fn write_str(&mut self, s: &str) { self.write(s.as_bytes()); }
+    pub fn write_and_echo(&mut self, data: &[u8]) {
+        self.write(data);
+        if let Ok(s) = std::str::from_utf8(data) {
+            let mut b = self.buffer.lock().unwrap();
+            if data == b"\x08" {
+                if let Some(last) = b.lines.last_mut() {
+                    last.pop();
+                }
+            } else if data == b"\r\n" || data == b"\n" {
+                b.push(String::new());
+            } else if data == b"\t" {
+                if let Some(last) = b.lines.last_mut() {
+                    last.push('\t');
+                }
+            } else if s.chars().all(|c| c.is_ascii_graphic() || c == ' ') {
+                if let Some(last) = b.lines.last_mut() {
+                    last.push_str(s);
+                }
+            }
+        }
+    }
 
     pub fn scroll_up(&mut self) {
         let total = self.buffer.lock().unwrap().lines.len();
