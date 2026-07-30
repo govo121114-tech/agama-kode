@@ -37,11 +37,16 @@ impl FileTree {
     }
 
     pub fn scan(&mut self) {
+        let expanded: Vec<PathBuf> = self.nodes
+            .iter()
+            .filter(|n| n.is_dir && n.expanded)
+            .map(|n| n.path.clone())
+            .collect();
         self.nodes.clear();
-        self.scan_dir(&self.root.clone(), 0, true);
+        self.scan_dir(&self.root.clone(), 0, true, &expanded);
     }
 
-    fn scan_dir(&mut self, dir: &Path, depth: usize, expanded: bool) {
+    fn scan_dir(&mut self, dir: &Path, depth: usize, expanded: bool, expanded_set: &[PathBuf]) {
         if depth > 0 && !expanded {
             return;
         }
@@ -84,7 +89,7 @@ impl FileTree {
             let path = entry.path();
             let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
             let name = entry.file_name().to_string_lossy().to_string();
-            let was_expanded = self.is_expanded(&path);
+            let was_expanded = expanded_set.contains(&path);
 
             self.nodes.push(FileNode {
                 path: path.clone(),
@@ -95,13 +100,9 @@ impl FileTree {
             });
 
             if is_dir && was_expanded {
-                self.scan_dir(&path, depth + 1, was_expanded);
+                self.scan_dir(&path, depth + 1, was_expanded, expanded_set);
             }
         }
-    }
-
-    fn is_expanded(&self, path: &Path) -> bool {
-        self.nodes.iter().any(|n| n.path == path && n.is_dir && n.expanded)
     }
 
     pub fn toggle_expand(&mut self) {
