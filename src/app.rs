@@ -311,20 +311,30 @@ impl App {
         self.command_buffer.clear();
         self.mode = Mode::Normal;
 
-        if cmd.starts_with("w ") || cmd.starts_with("write ") {
-            let path = cmd.split_at(2).1.trim();
+        if cmd == "w" || cmd == "write" {
+            let _ = self.save_current();
+        } else if cmd.starts_with("w ") {
+            let path = cmd[2..].trim();
             if !path.is_empty() {
                 let _ = self.save_current_as(path);
             }
-        } else if cmd == "w" || cmd == "write" {
-            let _ = self.save_current();
+        } else if cmd.starts_with("write ") {
+            let path = cmd[6..].trim();
+            if !path.is_empty() {
+                let _ = self.save_current_as(path);
+            }
         } else if cmd == "q" || cmd == "quit" {
             self.quit = true;
         } else if cmd == "wq" {
             let _ = self.save_current();
             self.quit = true;
-        } else if cmd.starts_with("e ") || cmd.starts_with("edit ") {
-            let path = cmd.split_at(2).1.trim();
+        } else if cmd.starts_with("e ") {
+            let path = cmd[2..].trim();
+            if !path.is_empty() {
+                self.open_file(path);
+            }
+        } else if cmd.starts_with("edit ") {
+            let path = cmd[5..].trim();
             if !path.is_empty() {
                 self.open_file(path);
             }
@@ -459,12 +469,11 @@ impl App {
                 self.start_project_creation();
             }
             KeyCode::Char('n') if ke.modifiers == KeyModifiers::CONTROL => {
-                if ke.modifiers.contains(KeyModifiers::SHIFT) {
-                    self.prev_tab();
-                } else {
-                    self.buffers.push(TextBuffer::new());
-                    self.active_buffer = self.buffers.len() - 1;
-                }
+                self.buffers.push(TextBuffer::new());
+                self.active_buffer = self.buffers.len() - 1;
+            }
+            KeyCode::Char('N') if ke.modifiers == KeyModifiers::CONTROL => {
+                self.prev_tab();
             }
             KeyCode::Tab if ke.modifiers == KeyModifiers::CONTROL => {
                 self.next_tab();
@@ -870,6 +879,18 @@ impl App {
         let search = &self.search;
         let p = self.editor.render(buf, area, search);
         f.render_widget(p, area);
+
+        if let Mode::Normal = self.mode {
+            if !self.filetree_focused && !(self.term_panel.visible && self.term_panel.focused) {
+                let cursor = buf.cursor();
+                let gutter_w = 6;
+                let screen_x = area.x + gutter_w + cursor.col as u16;
+                let screen_y = area.y + cursor.line as u16;
+                if screen_x < area.x + area.width && screen_y < area.y + area.height {
+                    f.set_cursor_position((screen_x, screen_y));
+                }
+            }
+        }
     }
 
     fn render_status(&self, f: &mut Frame, area: Rect) {

@@ -61,6 +61,7 @@ fn process_pty(raw: &str) -> String {
                         chars.next();
                         loop {
                             match chars.next() {
+                                Some('\x07') => break,
                                 Some('\x1b') => { if chars.next() == Some('\\') { break; } }
                                 Some(_) => {}
                                 None => break,
@@ -72,6 +73,9 @@ fn process_pty(raw: &str) -> String {
                 }
             }
             '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    continue;
+                }
                 if let Some(pos) = out.rfind('\n') {
                     out.truncate(pos + 1);
                 } else {
@@ -189,16 +193,16 @@ impl TerminalPanel {
         let buf = self.buffer.clone();
         thread::spawn(move || {
             let mut temp = [0u8; 4096];
+            let mut carry = String::new();
             loop {
-                match reader.read(&mut temp) {
+                let n = match reader.read(&mut temp) {
                     Ok(0) => break,
-                    Ok(n) => {
-                        if let Ok(s) = std::str::from_utf8(&temp[..n]) {
-                            buf.lock().unwrap().append(s);
-                        }
-                    }
+                    Ok(n) => n,
                     Err(_) => break,
-                }
+                };
+                carry.push_str(&String::from_utf8_lossy(&temp[..n]));
+                buf.lock().unwrap().append(&carry);
+                carry.clear();
             }
         });
 
@@ -233,7 +237,11 @@ impl TerminalPanel {
     }
 
     pub fn scroll_up(&mut self) {
-        let total = self.buffer.lock().unwrap().raw.len();
+        let total = {
+            let b = self.buffer.lock().unwrap();
+            let text = process_pty(&b.raw);
+            text.split('\n').filter(|l| !l.is_empty()).count()
+        };
         if self.scroll < total.saturating_sub(1) { self.scroll += 1; }
     }
 
