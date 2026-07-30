@@ -12,6 +12,7 @@ use crate::filetree::FileTree;
 use crate::search::SearchState;
 use crate::status::StatusBar;
 use crate::term_panel::TerminalPanel;
+use crate::cmd_palette::CmdPalette;
 use crate::theme;
 use crate::ai_project::{self, ProjectScaffold};
 
@@ -20,6 +21,7 @@ pub enum Mode {
     Command,
     Search,
     ProjectInput,
+    CmdPalette,
 }
 
 pub enum Action {
@@ -34,6 +36,7 @@ pub struct App {
     pub search: SearchState,
     pub editor: EditorRenderer,
     pub term_panel: TerminalPanel,
+    pub cmd_palette: CmdPalette,
     pub mode: Mode,
     pub command_buffer: String,
     pub quit: bool,
@@ -59,6 +62,7 @@ impl App {
             search: SearchState::new(),
             editor: EditorRenderer::new(),
             term_panel: TerminalPanel::new(),
+            cmd_palette: CmdPalette::new(),
             mode: Mode::Normal,
             command_buffer: String::new(),
             quit: false,
@@ -140,6 +144,7 @@ impl App {
             Mode::Search => self.handle_search_event(&evt),
             Mode::Command => self.handle_command_event(&evt),
             Mode::ProjectInput => self.handle_project_event(&evt),
+            Mode::CmdPalette => self.handle_cmd_palette_event(&evt),
             Mode::Normal => self.handle_normal_event(&evt),
         }
         Ok(())
@@ -214,6 +219,91 @@ impl App {
             },
             _ => {}
         }
+    }
+
+    fn handle_cmd_palette_event(&mut self, evt: &Event) {
+        match evt {
+            Event::Key(ke) => match ke.code {
+                KeyCode::Esc => {
+                    self.cmd_palette.toggle();
+                    self.mode = Mode::Normal;
+                }
+                KeyCode::Enter => {
+                    self.execute_cmd_palette();
+                }
+                KeyCode::Up => {
+                    self.cmd_palette.select_prev();
+                }
+                KeyCode::Down => {
+                    self.cmd_palette.select_next();
+                }
+                KeyCode::Tab => {
+                    self.cmd_palette.select_next();
+                }
+                KeyCode::BackTab => {
+                    self.cmd_palette.select_prev();
+                }
+                KeyCode::Backspace => {
+                    self.cmd_palette.pop_char();
+                }
+                KeyCode::Char(ch) => {
+                    self.cmd_palette.push_char(ch);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn execute_cmd_palette(&mut self) {
+        let cmd = self.cmd_palette.selected_cmd().unwrap_or("").to_string();
+        self.cmd_palette.toggle();
+        self.mode = Mode::Normal;
+
+        match cmd.as_str() {
+            "terminal" => {
+                if self.term_panel.visible {
+                    self.term_panel.stop();
+                } else {
+                    self.term_panel.start();
+                }
+            }
+            "wsl" => {
+                self.term_panel.start_wsl();
+            }
+            "save" => {
+                let _ = self.save_current();
+            }
+            "open" => {
+                self.filetree_focused = true;
+            }
+            "new file" => {
+                self.buffers.push(TextBuffer::new());
+                self.active_buffer = self.buffers.len() - 1;
+            }
+            "close tab" => {
+                self.close_current_tab();
+            }
+            "search" => {
+                self.search.toggle();
+                if self.search.active {
+                    self.mode = Mode::Search;
+                }
+            }
+            "project" => {
+                self.start_project_creation();
+            }
+            "help" => {
+                self.show_help();
+            }
+            "quit" => {
+                self.quit = true;
+            }
+            _ => {}
+        }
+    }
+
+    fn show_help(&self) {
     }
 
     fn execute_command(&mut self) {
@@ -337,12 +427,21 @@ impl App {
                     self.mode = Mode::Search;
                 }
             }
+            KeyCode::Char('/') if ke.modifiers == KeyModifiers::CONTROL => {
+                self.cmd_palette.toggle();
+                if self.cmd_palette.active {
+                    self.mode = Mode::CmdPalette;
+                } else {
+                    self.mode = Mode::Normal;
+                }
+            }
             KeyCode::Char('t') if ke.modifiers == KeyModifiers::CONTROL => {
                 if self.term_panel.visible {
                     if self.term_panel.focused {
                         self.term_panel.focused = false;
-                    } else {
                         self.term_panel.stop();
+                    } else {
+                        self.term_panel.focused = true;
                     }
                 } else {
                     self.term_panel.start();
@@ -632,6 +731,9 @@ impl App {
         if let Mode::ProjectInput = self.mode {
             self.render_project_form(f, area);
         }
+        if let Mode::CmdPalette = self.mode {
+            self.cmd_palette.render(area, f);
+        }
     }
 
     fn render_project_form(&self, f: &mut Frame, area: Rect) {
@@ -735,17 +837,25 @@ impl App {
         if area.width < 3 || area.height == 0 {
             return;
         }
-        let (list, state) = self.filetree.render(area);
-        let style = if self.filetree_focused {
+        let (mut list, state) = self.filetree.render(area);
+        let focused = self.filetree_focused;
+        let title = if focused {
+            " Files (↑↓ j/k · Enter open · h collapse · Tab exit) "
+        } else {
+            " Files (Ctrl+O focus) "
+        };
+        let style = if focused {
             Block::default()
+                .title(title)
                 .borders(Borders::RIGHT)
                 .style(Style::default().bg(theme::BG))
         } else {
             Block::default()
+                .title(title)
                 .borders(Borders::RIGHT)
                 .style(Style::default().bg(theme::BG_DARK))
         };
-        let list = list.block(style);
+        list = list.block(style);
         f.render_stateful_widget(list, area, state);
     }
 
@@ -774,6 +884,7 @@ impl App {
                 Mode::Command => "CMD",
                 Mode::Search => "SEARCH",
                 Mode::ProjectInput => "PROJECT",
+                Mode::CmdPalette => "PALETTE",
             }
         };
         let p = StatusBar::render(buf, mode_str, area);

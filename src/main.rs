@@ -1,6 +1,7 @@
 mod ai_project;
 mod app;
 mod buffer;
+mod cmd_palette;
 mod editor;
 mod filetree;
 mod search;
