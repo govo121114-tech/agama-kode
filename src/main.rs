@@ -1,3 +1,4 @@
+mod ai_project;
 mod app;
 mod buffer;
 mod editor;
@@ -7,11 +8,11 @@ mod status;
 mod theme;
 
 use std::io;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event};
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::{backend::CrosstermBackend, Terminal};
-use app::App;
+use app::{App, Action};
 
 fn main() -> io::Result<()> {
     let mut stdout = io::stdout();
@@ -30,16 +31,35 @@ fn main() -> io::Result<()> {
         })?;
 
         if let Event::Key(ke) = event::read()? {
-            if ke.code == KeyCode::Char('c')
-                && ke.modifiers == crossterm::event::KeyModifiers::CONTROL
-            {
-                // Send Ctrl+C as a normal key, not as interrupt
-                let _ = app.handle_event(Event::Key(ke));
-            } else {
-                let _ = app.handle_event(Event::Key(ke));
-            }
+            let _ = app.handle_event(Event::Key(ke));
         } else {
             let _ = app.handle_event(event::read()?);
+        }
+
+        match app.action {
+            Action::OpenTerminal => {
+                drop(terminal);
+                let mut out = io::stdout();
+                terminal::disable_raw_mode()?;
+                out.execute(LeaveAlternateScreen)?;
+
+                let shell = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
+                let mut child = std::process::Command::new(shell)
+                    .spawn()
+                    .expect("failed to spawn shell");
+                child.wait()?;
+
+                terminal::enable_raw_mode()?;
+                out.execute(EnterAlternateScreen)?;
+                let backend = CrosstermBackend::new(out);
+                terminal = Terminal::new(backend)?;
+                terminal.clear()?;
+                app.action = Action::None;
+            }
+            Action::Quit => {
+                app.quit = true;
+            }
+            Action::None => {}
         }
     }
 

@@ -12,11 +12,19 @@ use crate::filetree::FileTree;
 use crate::search::SearchState;
 use crate::status::StatusBar;
 use crate::theme;
+use crate::ai_project::{self, ProjectScaffold};
 
 pub enum Mode {
     Normal,
     Command,
     Search,
+    ProjectInput,
+}
+
+pub enum Action {
+    None,
+    OpenTerminal,
+    Quit,
 }
 
 pub struct App {
@@ -30,6 +38,13 @@ pub struct App {
     pub quit: bool,
     pub filetree_focused: bool,
     pub tree_width: u16,
+    pub action: Action,
+
+    pub proj_field: usize,
+    pub proj_name: String,
+    pub proj_lang: String,
+    pub proj_desc: String,
+    pub proj_status: String,
 }
 
 impl App {
@@ -46,6 +61,13 @@ impl App {
             quit: false,
             filetree_focused: false,
             tree_width: 25,
+            action: Action::None,
+
+            proj_field: 0,
+            proj_name: String::new(),
+            proj_lang: String::new(),
+            proj_desc: String::new(),
+            proj_status: String::new(),
         };
         if let Some(path) = std::env::args().nth(1) {
             app.open_file(&path);
@@ -109,9 +131,11 @@ impl App {
     }
 
     pub fn handle_event(&mut self, evt: Event) -> Result<(), String> {
+        self.action = Action::None;
         match self.mode {
             Mode::Search => self.handle_search_event(&evt),
             Mode::Command => self.handle_command_event(&evt),
+            Mode::ProjectInput => self.handle_project_event(&evt),
             Mode::Normal => self.handle_normal_event(&evt),
         }
         Ok(())
@@ -217,6 +241,8 @@ impl App {
                     self.filetree = FileTree::new(Path::new(path));
                 }
             }
+        } else if cmd == "newproject" || cmd == "np" {
+            self.start_project_creation();
         }
     }
 
@@ -271,6 +297,12 @@ impl App {
                 if self.search.active {
                     self.mode = Mode::Search;
                 }
+            }
+            KeyCode::Char('t') if ke.modifiers == KeyModifiers::CONTROL => {
+                self.action = Action::OpenTerminal;
+            }
+            KeyCode::Char('p') if ke.modifiers == KeyModifiers::CONTROL => {
+                self.start_project_creation();
             }
             KeyCode::Char('n') if ke.modifiers == KeyModifiers::CONTROL => {
                 if ke.modifiers.contains(KeyModifiers::SHIFT) {
@@ -401,6 +433,79 @@ impl App {
         }
     }
 
+    fn start_project_creation(&mut self) {
+        self.mode = Mode::ProjectInput;
+        self.proj_name.clear();
+        self.proj_lang = String::from("rust");
+        self.proj_desc.clear();
+        self.proj_field = 0;
+        self.proj_status.clear();
+    }
+
+    fn handle_project_event(&mut self, evt: &Event) {
+        match evt {
+            Event::Key(ke) => match ke.code {
+                KeyCode::Esc => {
+                    self.mode = Mode::Normal;
+                }
+                KeyCode::Tab => {
+                    self.proj_field = (self.proj_field + 1) % 3;
+                }
+                KeyCode::BackTab => {
+                    self.proj_field = if self.proj_field == 0 { 2 } else { self.proj_field - 1 };
+                }
+                KeyCode::Enter => {
+                    self.execute_project_creation();
+                }
+                KeyCode::Backspace => {
+                    match self.proj_field {
+                        0 => { self.proj_name.pop(); }
+                        1 => { self.proj_lang.pop(); }
+                        _ => { self.proj_desc.pop(); }
+                    }
+                }
+                KeyCode::Char(ch) => {
+                    match self.proj_field {
+                        0 => self.proj_name.push(ch),
+                        1 => self.proj_lang.push(ch),
+                        _ => self.proj_desc.push(ch),
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    fn execute_project_creation(&mut self) {
+        if self.proj_name.is_empty() {
+            self.proj_status = String::from("Error: Project name is required");
+            return;
+        }
+        let lang = if self.proj_lang.is_empty() {
+            String::from("rust")
+        } else {
+            self.proj_lang.clone()
+        };
+        let scaffold = ProjectScaffold {
+            name: self.proj_name.clone(),
+            language: lang,
+            description: self.proj_desc.clone(),
+        };
+        self.proj_status = String::from("Creating project...");
+        match ai_project::create_project(&scaffold) {
+            Ok(()) => {
+                self.proj_status = format!("Project '{}' created!", self.proj_name);
+                let cwd = std::env::current_dir().unwrap_or_else(|_| Path::new(".").to_path_buf());
+                self.filetree = FileTree::new(&cwd);
+                self.mode = Mode::Normal;
+            }
+            Err(e) => {
+                self.proj_status = format!("Error: {e}");
+            }
+        }
+    }
+
     pub fn render(&mut self, f: &mut Frame) {
         let area = f.area();
         let layout = Layout::default()
@@ -439,6 +544,77 @@ impl App {
         if let Mode::Command = self.mode {
             self.render_command_bar(f, area);
         }
+        if let Mode::ProjectInput = self.mode {
+            self.render_project_form(f, area);
+        }
+    }
+
+    fn render_project_form(&self, f: &mut Frame, area: Rect) {
+        let form_w = 55.min(area.width.saturating_sub(4));
+        let form_h = 14.min(area.height.saturating_sub(4));
+        let popup = Rect {
+            x: (area.width - form_w) / 2,
+            y: (area.height - form_h) / 2,
+            width: form_w,
+            height: form_h,
+        };
+        if popup.width < 20 || popup.height < 5 {
+            return;
+        }
+
+        f.render_widget(Clear, popup);
+
+        let fields = [
+            ("Project Name", self.proj_name.as_str()),
+            ("Language (rust/python/js/ts/go/c/cpp/html)", self.proj_lang.as_str()),
+            ("Description", self.proj_desc.as_str()),
+        ];
+
+        let mut lines = vec![
+            Line::from(Span::styled(
+                " New Project (Tab to switch, Enter to create, Esc to cancel)",
+                Style::default().fg(theme::ACCENT),
+            )),
+            Line::from(Span::raw("")),
+        ];
+
+        for (i, (label, val)) in fields.iter().enumerate() {
+            let is_active = i == self.proj_field;
+            let prefix = if is_active { "> " } else { "  " };
+            let label_style = if is_active {
+                Style::default().fg(theme::ACCENT).bg(theme::BG_LIGHT)
+            } else {
+                Style::default().fg(theme::FG_DIM)
+            };
+            let val_style = if val.is_empty() {
+                Style::default().fg(theme::FG_DIM)
+            } else {
+                Style::default().fg(theme::FG_BRIGHT)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{}: ", prefix, label), label_style),
+                Span::styled(val.to_string(), val_style),
+            ]));
+        }
+
+        if !self.proj_status.is_empty() {
+            lines.push(Line::from(Span::raw("")));
+            let status_color = if self.proj_status.starts_with("Error") {
+                theme::ACCENT_RED
+            } else if self.proj_status == "Creating project..." {
+                theme::ACCENT_ORANGE
+            } else {
+                theme::ACCENT_GREEN
+            };
+            lines.push(Line::from(Span::styled(
+                &self.proj_status,
+                Style::default().fg(status_color),
+            )));
+        }
+
+        let p = Paragraph::new(lines)
+            .block(Block::default().borders(Borders::ALL).title("Project Creator").style(Style::default().bg(theme::BG)));
+        f.render_widget(p, popup);
     }
 
     fn render_tabs(&self, f: &mut Frame, area: Rect) {
@@ -510,6 +686,7 @@ impl App {
                 Mode::Normal => "INSERT",
                 Mode::Command => "CMD",
                 Mode::Search => "SEARCH",
+                Mode::ProjectInput => "PROJECT",
             }
         };
         let p = StatusBar::render(buf, mode_str, area);
