@@ -42,7 +42,7 @@ fn main() -> io::Result<()> {
                     if let Some((last_code, last_mods, last_time)) = &last_key {
                         code == last_code
                             && modifiers == last_mods
-                            && last_time.elapsed() < Duration::from_millis(50)
+                            && last_time.elapsed() < Duration::from_millis(200)
                     } else {
                         false
                     }
