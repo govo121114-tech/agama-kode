@@ -5,6 +5,7 @@ mod editor;
 mod filetree;
 mod search;
 mod status;
+mod term_panel;
 mod theme;
 
 use std::io;
@@ -37,25 +38,6 @@ fn main() -> io::Result<()> {
         }
 
         match app.action {
-            Action::OpenTerminal => {
-                drop(terminal);
-                let mut out = io::stdout();
-                terminal::disable_raw_mode()?;
-                out.execute(LeaveAlternateScreen)?;
-
-                let shell = if cfg!(windows) { "cmd.exe" } else { "/bin/sh" };
-                let mut child = std::process::Command::new(shell)
-                    .spawn()
-                    .expect("failed to spawn shell");
-                child.wait()?;
-
-                terminal::enable_raw_mode()?;
-                out.execute(EnterAlternateScreen)?;
-                let backend = CrosstermBackend::new(out);
-                terminal = Terminal::new(backend)?;
-                terminal.clear()?;
-                app.action = Action::None;
-            }
             Action::Quit => {
                 app.quit = true;
             }

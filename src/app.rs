@@ -11,6 +11,7 @@ use crate::editor::EditorRenderer;
 use crate::filetree::FileTree;
 use crate::search::SearchState;
 use crate::status::StatusBar;
+use crate::term_panel::TerminalPanel;
 use crate::theme;
 use crate::ai_project::{self, ProjectScaffold};
 
@@ -23,7 +24,6 @@ pub enum Mode {
 
 pub enum Action {
     None,
-    OpenTerminal,
     Quit,
 }
 
@@ -33,12 +33,14 @@ pub struct App {
     pub filetree: FileTree,
     pub search: SearchState,
     pub editor: EditorRenderer,
+    pub term_panel: TerminalPanel,
     pub mode: Mode,
     pub command_buffer: String,
     pub quit: bool,
     pub filetree_focused: bool,
     pub tree_width: u16,
     pub action: Action,
+    pub terminal_height: u16,
 
     pub proj_field: usize,
     pub proj_name: String,
@@ -56,12 +58,14 @@ impl App {
             filetree: FileTree::new(&cwd),
             search: SearchState::new(),
             editor: EditorRenderer::new(),
+            term_panel: TerminalPanel::new(),
             mode: Mode::Normal,
             command_buffer: String::new(),
             quit: false,
             filetree_focused: false,
             tree_width: 25,
             action: Action::None,
+            terminal_height: 10,
 
             proj_field: 0,
             proj_name: String::new(),
@@ -275,6 +279,41 @@ impl App {
             return;
         }
 
+        if self.term_panel.visible && self.term_panel.focused {
+            if ke.modifiers == KeyModifiers::CONTROL {
+                match ke.code {
+                    KeyCode::Char('c') => self.term_panel.write_str("\x03"),
+                    KeyCode::Char('d') => self.term_panel.write_str("\x04"),
+                    KeyCode::Char('l') => self.term_panel.write_str("\x0c"),
+                    KeyCode::Char('z') => self.term_panel.write_str("\x1a"),
+                    _ => {}
+                }
+                return;
+            }
+            match ke.code {
+                KeyCode::Esc => self.term_panel.focused = false,
+                KeyCode::PageUp => self.term_panel.scroll_up(),
+                KeyCode::PageDown => self.term_panel.scroll_down(),
+                KeyCode::Char(ch) => {
+                    let mut buf = [0u8; 4];
+                    let s = ch.encode_utf8(&mut buf);
+                    self.term_panel.write_str(s);
+                }
+                KeyCode::Enter => self.term_panel.write_str("\r\n"),
+                KeyCode::Backspace => self.term_panel.write_str("\x08"),
+                KeyCode::Tab => self.term_panel.write_str("\t"),
+                KeyCode::Up => self.term_panel.write_str("\x1b[A"),
+                KeyCode::Down => self.term_panel.write_str("\x1b[B"),
+                KeyCode::Right => self.term_panel.write_str("\x1b[C"),
+                KeyCode::Left => self.term_panel.write_str("\x1b[D"),
+                KeyCode::Home => self.term_panel.write_str("\x1b[H"),
+                KeyCode::End => self.term_panel.write_str("\x1b[F"),
+                KeyCode::Delete => self.term_panel.write_str("\x1b[3~"),
+                _ => {}
+            }
+            return;
+        }
+
         match ke.code {
             KeyCode::Char('c') if ke.modifiers == KeyModifiers::CONTROL => {
                 let buf = self.active_buf();
@@ -299,7 +338,20 @@ impl App {
                 }
             }
             KeyCode::Char('t') if ke.modifiers == KeyModifiers::CONTROL => {
-                self.action = Action::OpenTerminal;
+                if self.term_panel.visible {
+                    if self.term_panel.focused {
+                        self.term_panel.focused = false;
+                    } else {
+                        self.term_panel.stop();
+                    }
+                } else {
+                    self.term_panel.start();
+                }
+            }
+            KeyCode::Char('`') if ke.modifiers == KeyModifiers::CONTROL => {
+                if self.term_panel.visible {
+                    self.term_panel.focused = !self.term_panel.focused;
+                }
             }
             KeyCode::Char('p') if ke.modifiers == KeyModifiers::CONTROL => {
                 self.start_project_creation();
@@ -320,6 +372,11 @@ impl App {
             }
             KeyCode::Char('w') if ke.modifiers == KeyModifiers::CONTROL => {
                 self.close_current_tab();
+            }
+            KeyCode::F(1) => {
+                if self.term_panel.visible {
+                    self.term_panel.focused = true;
+                }
             }
             KeyCode::Char(':') => {
                 self.mode = Mode::Command;
@@ -523,19 +580,47 @@ impl App {
 
         self.render_tabs(f, tab_area);
 
-        let main_layout = Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Length(self.tree_width),
-                Constraint::Min(1),
-            ])
-            .split(main_area);
+        if self.term_panel.visible {
+            let main_vert = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(1),
+                    Constraint::Length(self.terminal_height.min(area.height.saturating_sub(5))),
+                ])
+                .split(main_area);
 
-        let tree_area = main_layout[0];
-        let editor_area = main_layout[1];
+            let editor_zone = main_vert[0];
+            let term_area = main_vert[1];
 
-        self.render_filetree(f, tree_area);
-        self.render_editor(f, editor_area);
+            let main_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(self.tree_width),
+                    Constraint::Min(1),
+                ])
+                .split(editor_zone);
+
+            let tree_area = main_layout[0];
+            let editor_area = main_layout[1];
+
+            self.render_filetree(f, tree_area);
+            self.render_editor(f, editor_area);
+            f.render_widget(self.term_panel.render(term_area), term_area);
+        } else {
+            let main_layout = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Length(self.tree_width),
+                    Constraint::Min(1),
+                ])
+                .split(main_area);
+
+            let tree_area = main_layout[0];
+            let editor_area = main_layout[1];
+
+            self.render_filetree(f, tree_area);
+            self.render_editor(f, editor_area);
+        }
         self.render_status(f, status_area);
 
         if self.search.active {
@@ -679,7 +764,9 @@ impl App {
             return;
         }
         let buf = self.active_buf_ref();
-        let mode_str = if self.filetree_focused {
+        let mode_str = if self.term_panel.visible && self.term_panel.focused {
+            "TERM"
+        } else if self.filetree_focused {
             "TREE"
         } else {
             match self.mode {
