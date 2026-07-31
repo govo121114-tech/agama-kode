@@ -274,6 +274,13 @@ impl App {
             "save" => {
                 let _ = self.save_current();
             }
+            "save as" => {
+                self.mode = Mode::Command;
+                self.command_buffer = String::from(":w ");
+            }
+            "reload" => {
+                let _ = self.active_buf().reload();
+            }
             "open" => {
                 self.filetree_focused = true;
             }
@@ -284,11 +291,39 @@ impl App {
             "close tab" => {
                 self.close_current_tab();
             }
+            "close all" => {
+                self.buffers.clear();
+                self.buffers.push(TextBuffer::new());
+                self.active_buffer = 0;
+            }
             "search" => {
                 self.search.toggle();
                 if self.search.active {
                     self.mode = Mode::Search;
                 }
+            }
+            "replace" => {
+                self.mode = Mode::Command;
+                self.command_buffer = String::from(":%s/");
+            }
+            "select all" => {
+                let buf = self.active_buf();
+                buf.clear_extra_cursors();
+                buf.select_all();
+            }
+            "go to line" => {
+                self.mode = Mode::Command;
+                self.command_buffer = String::from(":goto ");
+            }
+            "delete line" => {
+                let buf = self.active_buf();
+                buf.clear_selection();
+                buf.delete_line();
+            }
+            "duplicate line" => {
+                let buf = self.active_buf();
+                buf.clear_selection();
+                buf.duplicate_line();
             }
             "project" => {
                 self.start_project_creation();
@@ -307,9 +342,11 @@ impl App {
     }
 
     fn execute_command(&mut self) {
-        let cmd = self.command_buffer.trim().to_string();
+        let raw = self.command_buffer.trim().to_string();
         self.command_buffer.clear();
         self.mode = Mode::Normal;
+
+        let cmd = raw.strip_prefix(':').unwrap_or(&raw).trim().to_string();
 
         if cmd == "w" || cmd == "write" {
             let _ = self.save_current();
@@ -347,6 +384,27 @@ impl App {
             }
         } else if cmd == "newproject" || cmd == "np" {
             self.start_project_creation();
+        } else if cmd.starts_with("goto ") {
+            if let Ok(n) = cmd[5..].trim().parse::<usize>() {
+                if n >= 1 {
+                    let line = (n - 1).min(self.active_buf().line_count() - 1);
+                    self.active_buf().set_cursor(crate::buffer::Cursor::new(line, 0));
+                }
+            }
+        } else if cmd.starts_with("%s/") {
+            let rest = &cmd[3..];
+            let parts: Vec<&str> = rest.splitn(3, '/').collect();
+            if parts.len() == 3 && !parts[0].is_empty() {
+                let to = parts[1].replace("\\/", "/");
+                self.active_buf().replace_all(parts[0], &to);
+            }
+        } else if cmd.starts_with("s/") {
+            let rest = &cmd[2..];
+            let parts: Vec<&str> = rest.splitn(3, '/').collect();
+            if parts.len() == 3 && !parts[0].is_empty() {
+                let to = parts[1].replace("\\/", "/");
+                self.active_buf().replace_all(parts[0], &to);
+            }
         }
     }
 

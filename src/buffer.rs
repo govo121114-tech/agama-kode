@@ -396,4 +396,69 @@ impl TextBuffer {
     pub fn clear_extra_cursors(&mut self) {
         self.cursors.clear();
     }
+
+    pub fn delete_line(&mut self) {
+        let line = self.cursor.line;
+        if self.lines.len() > 1 {
+            self.lines.remove(line);
+            if self.cursor.line >= self.lines.len() {
+                self.cursor.line = self.lines.len() - 1;
+            }
+        } else {
+            self.lines[0].clear();
+        }
+        self.cursor.col = self.cursor.col.min(self.lines[self.cursor.line].len());
+        self.dirty = true;
+    }
+
+    pub fn duplicate_line(&mut self) {
+        let line = self.cursor.line;
+        let copy = self.lines[line].clone();
+        self.lines.insert(line + 1, copy);
+        self.cursor.line += 1;
+        self.dirty = true;
+    }
+
+    pub fn select_all(&mut self) {
+        let last_line = self.lines.len() - 1;
+        self.selection = Some(Selection::new(
+            Cursor::new(0, 0),
+            Cursor::new(last_line, self.lines[last_line].len()),
+        ));
+    }
+
+    pub fn reload(&mut self) -> Result<(), String> {
+        let path = self.path.clone().ok_or("No file path")?;
+        let content = fs::read_to_string(&path).map_err(|e| format!("Cannot read file: {e}"))?;
+        let lines: Vec<String> = content
+            .split('\n')
+            .map(|l| {
+                if l.ends_with('\r') {
+                    l[..l.len() - 1].to_string()
+                } else {
+                    l.to_string()
+                }
+            })
+            .collect();
+        self.lines = if lines.is_empty() { vec![String::new()] } else { lines };
+        if self.cursor.line >= self.lines.len() {
+            self.cursor.line = self.lines.len() - 1;
+        }
+        self.cursor.col = self.cursor.col.min(self.lines[self.cursor.line].len());
+        self.dirty = false;
+        Ok(())
+    }
+
+    pub fn replace_all(&mut self, from: &str, to: &str) -> usize {
+        let mut count = 0;
+        for line in self.lines.iter_mut() {
+            if from.is_empty() { break; }
+            count += line.matches(from).count();
+            *line = line.replace(from, to);
+        }
+        if count > 0 {
+            self.dirty = true;
+        }
+        count
+    }
 }
