@@ -1,7 +1,7 @@
 use std::path::Path;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
-use ratatui::style::Style;
+use ratatui::style::{Style, Modifier};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::text::{Line, Span};
 use ratatui::Frame;
@@ -882,7 +882,7 @@ impl App {
         for (i, buf) in self.buffers.iter().enumerate() {
             let is_active = i == self.active_buffer;
             let name = if buf.is_dirty() {
-                format!(" {} * ", buf.filename())
+                format!(" {} ● ", buf.filename())
             } else {
                 format!(" {} ", buf.filename())
             };
@@ -890,16 +890,20 @@ impl App {
                 Style::default()
                     .fg(theme::FG_BRIGHT)
                     .bg(theme::TAB_ACTIVE_BG)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
                     .fg(theme::FG_DIM)
                     .bg(theme::TAB_INACTIVE_BG)
             };
             spans.push(Span::styled(name, style));
-            spans.push(Span::raw(" "));
+            if i < self.buffers.len() - 1 {
+                spans.push(Span::styled("│", Style::default().fg(theme::TAB_SEPARATOR)));
+            }
         }
         let line = Line::from(spans);
-        let p = Paragraph::new(line).style(Style::default().bg(theme::BG_DARK));
+        let p = Paragraph::new(line)
+            .style(Style::default().bg(theme::BG_DARK));
         f.render_widget(p, area);
     }
 
@@ -910,21 +914,16 @@ impl App {
         let (mut list, state) = self.filetree.render(area);
         let focused = self.filetree_focused;
         let title = if focused {
-            " Files (↑↓ j/k · Enter open · h collapse · Tab exit) "
+            format!(" {} Files ", "▸")
         } else {
-            " Files (Ctrl+O focus) "
+            format!(" {} Files ", "▹")
         };
-        let style = if focused {
-            Block::default()
-                .title(title)
-                .borders(Borders::RIGHT)
-                .style(Style::default().bg(theme::BG))
-        } else {
-            Block::default()
-                .title(title)
-                .borders(Borders::RIGHT)
-                .style(Style::default().bg(theme::BG_DARK))
-        };
+        let border_style = theme::border_style(focused);
+        let style = Block::default()
+            .title(title)
+            .borders(Borders::RIGHT)
+            .style(Style::default().bg(theme::BG))
+            .border_style(border_style);
         list = list.block(style);
         f.render_stateful_widget(list, area, state);
     }

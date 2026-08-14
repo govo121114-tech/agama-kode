@@ -139,39 +139,41 @@ impl FileTree {
         let items: Vec<ListItem> = self
             .nodes
             .iter()
-            .map(|n| {
+            .enumerate()
+            .map(|(idx, n)| {
+                let selected = self.state.selected().map_or(false, |s| s == idx);
                 let prefix = if n.is_dir {
                     if n.expanded { "▼ " } else { "▶ " }
                 } else {
                     "  "
                 };
                 let indent = "  ".repeat(n.depth);
-                let content = if n.is_dir {
-                    Span::styled(
-                        format!("{}{}{}", indent, prefix, n.name),
-                        Style::default().fg(theme::TREE_DIR),
-                    )
+                let icon = if n.is_dir {
+                    "📁"
                 } else {
-                    Span::styled(
-                        format!("{}{}", indent, n.name),
-                        Style::default().fg(theme::TREE_FILE),
-                    )
+                    "📄"
                 };
-                ListItem::new(Line::from(content))
+                let content = format!("{}{}{} {}", indent, prefix, icon, n.name);
+                ListItem::new(Line::from(Span::styled(
+                    content,
+                    theme::tree_file_style(n.is_dir, selected),
+                )))
             })
             .collect();
 
         let list = List::new(items)
             .block(
                 Block::default()
-                    .borders(Borders::RIGHT)
+                    .borders(Borders::NONE)
                     .style(Style::default().bg(theme::BG)),
             )
             .highlight_style(
                 Style::default()
                     .bg(theme::TREE_SELECTED_BG)
-                    .fg(theme::FG_BRIGHT),
-            );
+                    .fg(theme::FG_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▸ ");
 
         (list, &mut self.state)
     }
