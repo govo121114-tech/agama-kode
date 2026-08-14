@@ -118,16 +118,19 @@ impl CmdPalette {
             .iter()
             .enumerate()
             .map(|(i, cmd)| {
-                let prefix = if i == self.selected { " > " } else { "   " };
+                let prefix = if i == self.selected { "▸" } else { " " };
                 let style = if i == self.selected {
-                    Style::default().fg(theme::FG_BRIGHT).bg(theme::BG_LIGHT)
+                    Style::default()
+                        .fg(theme::FG_BRIGHT)
+                        .bg(theme::BG_LIGHT)
+                        .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default().fg(theme::FG)
                 };
                 ListItem::new(Line::from(vec![
-                    Span::styled(format!("{}{}", prefix, cmd.name), style),
+                    Span::styled(format!(" {} {} ", prefix, cmd.name), style),
                     Span::styled(
-                        format!("  — {}", cmd.desc),
+                        format!("— {}", cmd.desc),
                         Style::default().fg(theme::FG_DIM),
                     ),
                 ]))
@@ -138,10 +141,16 @@ impl CmdPalette {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!(" Commands: {} ", self.query))
-                    .style(Style::default().bg(theme::BG)),
+                    .title(format!(" {} Commands ", "⌘"))
+                    .style(Style::default().bg(theme::BG))
+                    .border_style(theme::border_style(true)),
             )
-            .highlight_style(Style::default().bg(theme::BG_LIGHT));
+            .highlight_style(
+                Style::default()
+                    .bg(theme::BG_LIGHT)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▸ ");
 
         let mut list_state = ListState::default();
         if !filtered.is_empty() {
